@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard Hệ Thống</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script> <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom"></script>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 0; padding: 0; background-color: #f0f2f5; color: #333; display: flex; flex-direction: column; min-height: 100vh; }
+        .header { background-color: #007bff; color: white; padding: 15px 30px; text-align: center; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .header h1 { margin: 0; font-size: 1.8em; }
+        .container { display: flex; flex-wrap: wrap; padding: 20px; gap: 20px; flex-grow: 1; }
+        .card { background-color: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); flex: 1; min-width: 300px; }
+        .card h2 { margin-top: 0; color: #0056b3; border-bottom: 2px solid #eee; padding-bottom: 10px; font-size: 1.4em; }
+        .card p, .card div { margin-bottom: 12px; font-size: 1em; }
+        .card span { font-weight: bold; color: #007bff; }
+        .button-group button { margin-right: 10px; margin-top: 5px; background-color: #007bff; color: white; padding: 8px 12px; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9em; }
+        .button-group button:hover { background-color: #0056b3; }
+        .footer { background-color: #343a40; color: white; text-align: center; padding: 15px; margin-top: auto; }
+        .chart-container { height: 250px; margin-bottom: 20px; }
+    </style>
+</head>
+<body>
+    <div class="header"><h1>Dashboard Hệ Thống Giám Sát</h1></div>
+
+    <div class="container">
+        <div class="card" id="sensor-data-card">
+            <h2>Dữ Liệu Cảm Biến</h2>
+            <p>Độ ẩm: <span id="humidity">N/A</span> %</p>
+            <p>Nhiệt độ: <span id="temperature">N/A</span> °C</p>
+            <p>Số lượng chim (Tổng): <span id="bird_count_total">N/A</span></p>
+            <p>Chim vào (Hôm nay): <span id="bird_in">N/A</span></p>
+            <p>Chim ra (Hôm nay): <span id="bird_out">N/A</span></p>
+            <p>Trạng thái Relay: <span id="actual_relay_status">N/A</span></p>
+            <p>Thời gian cập nhật: <span id="timestamp">N/A</span></p>
+        </div>
+
+        <div class="card" id="charts-card" style="flex-basis: 100%;">
+            <h2>Biểu Đồ Dữ Liệu Trực Tiếp & Lịch Sử</h2>
+            <div class="button-group">
+                <button onclick="switchTimeRange('day')">Hôm nay</button>
+                <button onclick="switchTimeRange('week')">1 Tuần</button>
+                <button onclick="switchTimeRange('month')">1 Tháng</button>
+                <button onclick="resetAllChartsZoom()">Reset Zoom</button>
+            </div>
+            <div class="chart-container">
+                <canvas id="humidityChart"></canvas>
+            </div>
+            <div class="chart-container">
+                <canvas id="temperatureChart"></canvas>
+            </div>
+            <div class="chart-container" style="height: 300px;">
+                <canvas id="combinedBirdChart"></canvas>
+            </div>
+            <div class="chart-container">
+                <canvas id="relayChart"></canvas>
+            </div>
+        </div>
+
+        <div class="card" id="daily-reports-card" style="flex-basis: 100%;">
+            <h2>Báo Cáo Chim Hàng Ngày</h2>
+             <div class="button-group">
+                <button onclick="fetchAndDisplayDailyReports(7)">7 Ngày</button>
+                <button onclick="fetchAndDisplayDailyReports(30)">30 Ngày</button>
+                <button onclick="fetchAndDisplayDailyReports(90)">90 Ngày</button>
+            </div>
+            <div class="chart-container" style="height: 350px;">
+                <canvas id="dailyReportChart"></canvas>
+            </div>
+        </div>
+    </div>
+    <div class="footer"><p>&copy; 2025 Hệ thống giám sát</p></div>
+
+    <script>
+        let humidityChart, temperatureChart, combinedBirdChart, relayChart, dailyReportChart;
+        const MAX_LIVE_DATA_POINTS = 60; 
+        let currentRange = 'day';
+
+        // Trả về timestamp bắt đầu và kết thúc của ngày hiện tại.
+        function getCurrentDayTimeRange() {
+            const now = new Date();
+            const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+            const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+            return { min: startOfDay.getTime(), max: endOfDay.getTime() };
+        }
+
+        // Tạo và cấu hình một biểu đồ đường chung.
+        function createChart(canvasId, label, borderColor, backgroundColor, yAxisLabel = 'Giá trị', stepped = false, yMin = null, yMax = null) {
+            const ctx = document.getElementById(canvasId).getContext('2d');
+            let yAxisOptions = {
+                title: { display: true, text: yAxisLabel },
+                beginAtZero: false
+            };
+            if (yMin !== null) yAxisOptions.min = yMin;
+            if (yMax !== null) yAxisOptions.max = yMax;
+            if (stepped) {
+                yAxisOptions.beginAtZero = true;
+                yAxisOptions.ticks = { stepSize: 1, precision: 0 };
+            }
+
+            return new Chart(ctx, {
+                type: 'line',
+                data: { labels: [], datasets: [{ label: label, data: [], borderColor: borderColor, backgroundColor: backgroundColor, tension: 0.1, fill: true, stepped: stepped }] },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    scales: {
+                        x: { type: 'time', time: { tooltipFormat: 'dd/MM/yyyy HH:mm:ss', displayFormats: { minute: 'HH:mm', hour: 'HH:mm' } }, title: { display: true, text: 'Thời gian' } },
+                        y: yAxisOptions
+                    },
+                    plugins: { zoom: { pan: { enabled: true, mode: 'x' }, zoom: { wheel: { enabled: true }, pinch: { enabled: true }, mode: 'x' } } }
+                }
+            });
+        }
+
+        // Tạo và cấu hình biểu đồ đường kết hợp dữ liệu chim.
+        function createCombinedBirdChart(canvasId) {
+            const ctx = document.getElementById(canvasId).getContext('2d');
+            return new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [
+                        { label: 'Tổng Chim (Live)', data: [], borderColor: 'rgba(255, 99, 132, 1)', backgroundColor: 'rgba(255, 99, 132, 0.2)', tension: 0.1, fill: true, stepped: true },
+                        { label: 'Chim Vào (Live)', data: [], borderColor: 'rgba(54, 162, 235, 1)', backgroundColor: 'rgba(54, 162, 235, 0.2)', tension: 0.1, fill: true, stepped: true },
+                        { label: 'Chim Ra (Live)', data: [], borderColor: 'rgba(153, 102, 255, 1)', backgroundColor: 'rgba(153, 102, 255, 0.2)', tension: 0.1, fill: true, stepped: true }
+                    ]
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    scales: {
+                        x: { type: 'time', time: { tooltipFormat: 'dd/MM/yyyy HH:mm:ss', displayFormats: { minute: 'HH:mm', hour: 'HH:mm' } }, title: { display: true, text: 'Thời gian' } },
+                        y: { title: { display: true, text: 'Số lượng' }, beginAtZero: true, ticks: { stepSize: 1, precision: 0 } }
+                    },
+                    plugins: { legend: { display: true }, zoom: { pan: { enabled: true, mode: 'x' }, zoom: { wheel: { enabled: true }, pinch: { enabled: true }, mode: 'x' } } }
+                }
+            });
+        }
+
+        // Tạo và cấu hình biểu đồ cột báo cáo chim hàng ngày.
+        function createDailyReportChart(canvasId) {
+            const ctx = document.getElementById(canvasId).getContext('2d');
+            return new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: [], 
+                    datasets: [
+                        { label: 'Chim Vào (Hàng Ngày)', data: [], backgroundColor: 'rgba(54, 162, 235, 0.7)', borderColor: 'rgba(54, 162, 235, 1)', borderWidth: 1 },
+                        { label: 'Chim Ra (Hàng Ngày)', data: [], backgroundColor: 'rgba(255, 159, 64, 0.7)', borderColor: 'rgba(255, 159, 64, 1)', borderWidth: 1 },
+                        { label: 'Tổng Chim (Cuối Ngày)', data: [], backgroundColor: 'rgba(75, 192, 192, 0.7)', borderColor: 'rgba(75, 192, 192, 1)', borderWidth: 1 }
+                    ]
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    scales: {
+                        x: { title: { display: true, text: 'Ngày' } },
+                        y: { beginAtZero: true, title: { display: true, text: 'Số lượng' }, ticks: { stepSize: 1, precision: 0 } }
+                    },
+                    plugins: { legend: { position: 'top' }, tooltip: { mode: 'index', intersect: false } }
+                }
+            });
+        }
+
+        // Tải dữ liệu báo cáo chim hàng ngày cho số ngày được chỉ định và cập nhật biểu đồ.
+        async function fetchAndDisplayDailyReports(days = 30) {
+            try {
+                const response = await fetch(`/api/daily_reports_history?days=${days}`);
+                if (!response.ok) {
+                    console.error("Lỗi tải báo cáo hàng ngày: HTTP status " + response.status);
+                    return;
+                }
+                const reports = await response.json();
+                if (dailyReportChart && reports) {
+                    dailyReportChart.data.labels = reports.map(item => item.date);
+                    dailyReportChart.data.datasets[0].data = reports.map(item => item.chimVaoDaily);
+                    dailyReportChart.data.datasets[1].data = reports.map(item => item.chimRaDaily);
+                    dailyReportChart.data.datasets[2].data = reports.map(item => item.chimTongDaily);
+                    dailyReportChart.update('none');
+                }
+            } catch (error) {
+                console.error("Lỗi tải hoặc xử lý báo cáo hàng ngày:", error);
+            }
+        }
+
+        // Đặt lại mức thu phóng cho tất cả các biểu đồ có thể thu phóng.
+        function resetAllChartsZoom() {
+            const charts = [humidityChart, temperatureChart, combinedBirdChart, relayChart];
+            charts.forEach(chart => { if (chart) chart.resetZoom('none'); });
+            applyTimeRangeToCharts(currentRange);
+        }
+
+        // Áp dụng phạm vi thời gian đã chọn (ngày, tuần, tháng) cho trục x của biểu đồ dữ liệu lịch sử.
+        function applyTimeRangeToCharts(range) {
+            const chartsToRange = [humidityChart, temperatureChart, combinedBirdChart, relayChart];
+            let minTime, maxTime;
+
+            if (range === 'day') {
+                const dayRange = getCurrentDayTimeRange();
+                minTime = dayRange.min;
+                maxTime = dayRange.max;
+            }
+
+            chartsToRange.forEach(chart => {
+                if (chart) {
+                    if (range === 'day') {
+                        chart.options.scales.x.min = minTime;
+                        chart.options.scales.x.max = maxTime;
+                    } else {
+                        delete chart.options.scales.x.min;
+                        delete chart.options.scales.x.max;
+                    }
+                    chart.update('none');
+                }
+            });
+        }
+
+        // Cập nhật biểu đồ đường một tập dữ liệu với dữ liệu trực tiếp mới, quản lý giới hạn điểm dữ liệu.
+        function updateLiveChartData(chart, newDataPoint, timestamp) {
+            if (!chart || newDataPoint === undefined) return;
+            const labels = chart.data.labels;
+            const dataSet = chart.data.datasets[0].data;
+            const pointTime = new Date(timestamp).getTime();
+
+            if (labels.length >= MAX_LIVE_DATA_POINTS) {
+                labels.shift();
+                dataSet.shift();
+            }
+            labels.push(pointTime);
+            dataSet.push(newDataPoint !== null ? newDataPoint : NaN);
+            chart.update('quiet');
+        }
+        
+        // Cập nhật biểu đồ đường kết hợp dữ liệu chim với dữ liệu trực tiếp mới, quản lý giới hạn điểm dữ liệu.
+        function updateLiveCombinedBirdChart(chart, chimTong, chimVao, chimRa, timestamp) {
+            if (!chart) return;
+            const labels = chart.data.labels;
+            const pointTime = new Date(timestamp).getTime();
+
+            if (labels.length >= MAX_LIVE_DATA_POINTS) {
+                labels.shift();
+                chart.data.datasets.forEach(dataset => dataset.data.shift());
+            }
+            labels.push(pointTime);
+            chart.data.datasets[0].data.push(chimTong !== null ? chimTong : NaN);
+            chart.data.datasets[1].data.push(chimVao !== null ? chimVao : NaN);
+            chart.data.datasets[2].data.push(chimRa !== null ? chimRa : NaN);
+            chart.update('quiet');
+        }
+
+        // Tải dữ liệu cảm biến mới nhất từ API và cập nhật các thành phần UI và biểu đồ trực tiếp.
+        async function fetchSensorData() {
+            try {
+                const response = await fetch('/api/data');
+                if (!response.ok) throw new Error("HTTP status " + response.status);
+                const data = await response.json();
+
+                document.getElementById('humidity').textContent = data.humidity !== null ? data.humidity.toFixed(1) : 'N/A';
+                document.getElementById('temperature').textContent = data.temperature !== null ? data.temperature.toFixed(1) : 'N/A';
+                document.getElementById('bird_count_total').textContent = data.chimTong !== null ? data.chimTong : 'N/A';
+                document.getElementById('bird_in').textContent = data.chimVao !== null ? data.chimVao : 'N/A';
+                document.getElementById('bird_out').textContent = data.chimRa !== null ? data.chimRa : 'N/A';
+                document.getElementById('actual_relay_status').textContent = data.relay_status !== null ? (data.relay_status === 1 ? 'BẬT' : 'TẮT') : 'N/A';
+                document.getElementById('timestamp').textContent = data.timestamp ? new Date(data.timestamp).toLocaleString('vi-VN') : 'N/A';
+
+                if (data.timestamp) {
+                    updateLiveChartData(humidityChart, data.humidity, data.timestamp);
+                    updateLiveChartData(temperatureChart, data.temperature, data.timestamp);
+                    updateLiveCombinedBirdChart(combinedBirdChart, data.chimTong, data.chimVao, data.chimRa, data.timestamp);
+                    updateLiveChartData(relayChart, data.relay_status, data.timestamp);
+                }
+            } catch (error) {
+                console.error("Lỗi tải dữ liệu cảm biến:", error);
+                document.getElementById('timestamp').textContent = 'Lỗi kết nối';
+            }
+        }
+
+        // Tải dữ liệu cảm biến lịch sử cho phạm vi được chỉ định (ngày, tuần, tháng).
+        async function fetchHistoricalData(range) {
+            try {
+                const response = await fetch(`/api/historical_data?range=${range}`);
+                if (!response.ok) throw new Error("HTTP status " + response.status);
+                const historicalJsonData = await response.json();
+                updateChartsWithHistoricalData(historicalJsonData);
+            } catch (error) {
+                console.error("Lỗi tải dữ liệu lịch sử:", error);
+            }
+        }
+
+        // Cập nhật tất cả các biểu đồ liên quan với dữ liệu lịch sử đã tải.
+        function updateChartsWithHistoricalData(apiData) {
+            const labels = apiData.map(item => new Date(item.timestamp).getTime());
+            
+            updateSingleChartHistorical(humidityChart, labels, apiData.map(item => item.humidity));
+            updateSingleChartHistorical(temperatureChart, labels, apiData.map(item => item.temperature));
+            updateSingleChartHistorical(relayChart, labels, apiData.map(item => item.relay_status));
+
+            if (combinedBirdChart) {
+                combinedBirdChart.data.labels = labels;
+                combinedBirdChart.data.datasets[0].data = apiData.map(item => item.chimTong);
+                combinedBirdChart.data.datasets[1].data = apiData.map(item => item.chimVao);
+                combinedBirdChart.data.datasets[2].data = apiData.map(item => item.chimRa);
+                combinedBirdChart.update('none');
+            }
+        }
+        
+        // Hàm trợ giúp để cập nhật biểu đồ một tập dữ liệu với dữ liệu lịch sử.
+        function updateSingleChartHistorical(chart, labels, data) {
+            if (!chart) return;
+            chart.data.labels = labels;
+            chart.data.datasets[0].data = data;
+            chart.update('none');
+        }
+
+        // Xử lý việc chuyển đổi phạm vi thời gian cho dữ liệu lịch sử, tải dữ liệu mới và cập nhật chế độ xem biểu đồ.
+        async function switchTimeRange(range) {
+            currentRange = range;
+            await fetchHistoricalData(range); 
+            applyTimeRangeToCharts(range);    
+        }
+
+        // Khởi tạo tất cả các biểu đồ, tải dữ liệu ban đầu và thiết lập cập nhật định kỳ.
+        async function initializeDashboard() {
+            humidityChart = createChart('humidityChart', 'Độ ẩm (%)', 'rgba(75, 192, 192, 1)', 'rgba(75, 192, 192, 0.2)', 'Độ ẩm (%)');
+            temperatureChart = createChart('temperatureChart', 'Nhiệt độ (°C)', 'rgba(255, 159, 64, 1)', 'rgba(255, 159, 64, 0.2)', 'Nhiệt độ (°C)');
+            combinedBirdChart = createCombinedBirdChart('combinedBirdChart');
+            relayChart = createChart('relayChart', 'Relay', 'rgba(100, 100, 255, 1)', 'rgba(100,100,255,0.2)', 'Trạng thái (0=TẮT, 1=BẬT)', true, 0, 1);
+            dailyReportChart = createDailyReportChart('dailyReportChart');
+
+            await switchTimeRange(currentRange); 
+            fetchSensorData(); 
+            setInterval(fetchSensorData, 5000);
+            fetchAndDisplayDailyReports(); 
+        }
+
+        initializeDashboard();
+    </script>
+</body>
+</html>
